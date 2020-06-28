@@ -131,7 +131,7 @@ def import_inverter_data(args, influx):
 
 def convert_power_metric(metric, tags):
     time = datetime.strptime(metric["date"], "%Y-%m-%d %H:%M:%S")
-    power = metric["value"]
+    power = metric.get("value")
     power = float(power if power is not None else 0)
     return dict(
         measurement="solaredge_power",
@@ -147,6 +147,29 @@ def import_power_data(args, influx):
     tags = dict(site_id=args.site_id)
     influx.write_points(
         convert_power_metric(metric, tags) for metric in response["power"]["values"]
+    )
+
+
+def convert_energy_metric(metric, tags):
+    time = datetime.strptime(metric["date"], "%Y-%m-%d %H:%M:%S")
+    energy = metric.get("value")
+    energy = float(energy if energy is not None else 0)
+    return dict(
+        measurement="solaredge_energy",
+        tags=tags,
+        time=time.astimezone().isoformat(),
+        fields=dict(energy=energy),
+    )
+
+
+def import_energy_data(args, influx):
+    params = time_period_params(args, timedelta(days=30))
+    params = dict(**params, meters="Production", timeUnit="QUARTER_OF_AN_HOUR")
+    response = api_request(args.api_key, f"/site/{args.site_id}/energyDetails", params)
+    meter = response["energyDetails"]["meters"][0]
+    tags = dict(site_id=args.site_id)
+    influx.write_points(
+        convert_energy_metric(metric, tags) for metric in meter["values"]
     )
 
 
@@ -198,6 +221,10 @@ def main():
     parser_import_power = subparsers.add_parser("power", help="import power data")
     add_time_period_args(parser_import_power)
     parser_import_power.set_defaults(func=import_power_data)
+
+    parser_import_energy = subparsers.add_parser("energy", help="import energy data")
+    add_time_period_args(parser_import_energy)
+    parser_import_energy.set_defaults(func=import_energy_data)
 
     args = parser.parse_args()
 
