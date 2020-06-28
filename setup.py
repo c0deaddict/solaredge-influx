@@ -5,7 +5,7 @@ with open("README.org", "r") as fh:
 
 setuptools.setup(
     name="solaredge-influx",
-    version="0.0.1",
+    version="0.0.2",
     author="Jos van Bakel",
     author_email="jos@codeaddict.org",
     description="Queries the Solaredge monitoring API and stores the data in InfluxDB",
