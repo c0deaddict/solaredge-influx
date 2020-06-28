@@ -1,0 +1,3 @@
+* Solaredge to InfluxDB
+
+Queries the Solaredge Monitoring API and stores the data in InfluxDB.
