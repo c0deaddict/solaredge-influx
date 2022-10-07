@@ -4,7 +4,8 @@ mkShell {
   buildInputs = [
     (python3.withPackages(ps: with ps; [
       requests
-      influxdb
+      influxdb-client
+      pydantic
     ]))
   ];
 }

@@ -3,25 +3,40 @@ import requests
 from os import getenv
 import sys
 
-from influxdb import InfluxDBClient
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
 from datetime import datetime, timedelta
+
+from .config import Config
+import json
 
 
 solaredge_api_url = "https://monitoringapi.solaredge.com"
 required_version = dict(release="1.0.0")
 
 
-def api_request(api_key, path, params=dict()):
-    params = dict(**params, api_key=api_key)
+def api_request(config, path, params=dict()):
+    params = dict(**params, api_key=config.solaredge.api_key)
     response = requests.get(solaredge_api_url + path, params, timeout=60)
     if response.status_code != 200:
         raise Exception(f"Solaredge API error {response.status_code}")
     return response.json()
 
 
-def version_check(args, influx):
-    current = api_request(args.api_key, "/version/current")["version"]
-    supported = api_request(args.api_key, "/version/supported")["supported"]
+def influx_write_points(config, points):
+    options = dict(
+        url=config.influxdb.url,
+        token=config.influxdb.token,
+        org=config.influxdb.org,
+    )
+    with InfluxDBClient(**options) as client:
+        with client.write_api() as write_api:
+            write_api.write(config.influxdb.bucket, config.influxdb.org, points)
+
+
+def version_check(args, config):
+    current = api_request(config, "/version/current")["version"]
+    supported = api_request(config, "/version/supported")["supported"]
     print(f"Solaredge API version: {current}")
     if required_version not in supported:
         print(f"API version {required_version} is NOT supported anymore")
@@ -30,8 +45,8 @@ def version_check(args, influx):
         print("API version is supported")
 
 
-def show_inventory(args, influx):
-    response = api_request(args.api_key, f"/site/{args.site_id}/inventory")
+def show_inventory(args, config):
+    response = api_request(config, f"/site/{config.solaredge.site_id}/inventory")
     for inv in response["Inventory"]["inverters"]:
         print(inv["name"])
         print(f"Model: {inv['manufacturer']} {inv['model']}")
@@ -118,14 +133,17 @@ def convert_inverter_metric(metric, tags):
     )
 
 
-def import_inverter_data(args, influx):
+def import_inverter_data(args, config):
     params = time_period_params(args, timedelta(days=7))
-    url = f"/equipment/{args.site_id}/{args.serial}/data"
-    response = api_request(args.api_key, url, params)
-    tags = dict(site_id=args.site_id, serial=args.serial)
-    influx.write_points(
-        convert_inverter_metric(metric, tags)
-        for metric in response["data"]["telemetries"]
+    url = f"/equipment/{config.solaredge.site_id}/{config.solaredge.serial}/data"
+    response = api_request(config, url, params)
+    tags = dict(site_id=config.solaredge.site_id, serial=config.solaredge.serial)
+    influx_write_points(
+        config,
+        (
+            convert_inverter_metric(metric, tags)
+            for metric in response["data"]["telemetries"]
+        ),
     )
 
 
@@ -141,12 +159,13 @@ def convert_power_metric(metric, tags):
     )
 
 
-def import_power_data(args, influx):
+def import_power_data(args, config):
     params = time_period_params(args, timedelta(days=30))
-    response = api_request(args.api_key, f"/site/{args.site_id}/power", params)
-    tags = dict(site_id=args.site_id)
-    influx.write_points(
-        convert_power_metric(metric, tags) for metric in response["power"]["values"]
+    response = api_request(config, f"/site/{config.solaredge.site_id}/power", params)
+    tags = dict(site_id=config.solaredge.site_id)
+    influx_write_points(
+        config,
+        (convert_power_metric(metric, tags) for metric in response["power"]["values"]),
     )
 
 
@@ -162,44 +181,26 @@ def convert_energy_metric(metric, tags):
     )
 
 
-def import_energy_data(args, influx):
+def import_energy_data(args, config):
     params = time_period_params(args, timedelta(days=30))
     params = dict(**params, meters="Production", timeUnit="QUARTER_OF_AN_HOUR")
-    response = api_request(args.api_key, f"/site/{args.site_id}/energyDetails", params)
+    response = api_request(
+        config, f"/site/{config.solaredge.site_id}/energyDetails", params
+    )
     meter = response["energyDetails"]["meters"][0]
-    tags = dict(site_id=args.site_id)
-    influx.write_points(
-        convert_energy_metric(metric, tags) for metric in meter["values"]
+    tags = dict(site_id=config.solaredge.site_id)
+    influx_write_points(
+        config, (convert_energy_metric(metric, tags) for metric in meter["values"])
     )
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--api-key",
-        help="Solaredge API key (env SOLAREDGE_API_KEY)",
-        default=getenv("SOLAREDGE_API_KEY"),
-    )
-    parser.add_argument(
-        "--site-id",
-        help="Site ID (env SOLAREDGE_SITE_ID)",
-        default=getenv("SOLAREDGE_SITE_ID"),
-    )
-    parser.add_argument(
-        "--influx-host",
-        help="InfluxDB host, defaults to 'localhost' (env INFLUXDB_HOST)",
-        default=getenv("INFLUX_HOST", "localhost"),
-    )
-    parser.add_argument(
-        "--influx-port",
-        help="InfluxDB port, defaults to 8086 (env INFLUX_PORT)",
-        type=int,
-        default=int(getenv("INFLUX_PORT", "8086")),
-    )
-    parser.add_argument(
-        "--influx-db",
-        help="InfluxDB database (env INFLUX_DB)",
-        default=getenv("INFLUX_DB"),
+        "-c",
+        "--config",
+        help="Config file",
+        required=True,
     )
     subparsers = parser.add_subparsers()
 
@@ -211,9 +212,6 @@ def main():
 
     parser_import_inventory = subparsers.add_parser(
         "inverter", help="import inverter data"
-    )
-    parser_import_inventory.add_argument(
-        "--serial", help="Inverter Serial number", required=True
     )
     add_time_period_args(parser_import_inventory)
     parser_import_inventory.set_defaults(func=import_inverter_data)
@@ -228,28 +226,14 @@ def main():
 
     args = parser.parse_args()
 
-    if args.api_key is None:
-        print(
-            "No api-key given. Either specify it via the --api-key "
-            "argument of the SOLAREDGE_API_KEY environment variable"
-        )
-
-    if args.site_id is None:
-        print(
-            "No site-id given. Either specify it via the --site-id "
-            "argument of the SOLAREDGE_SITE_ID environment variable"
-        )
-        sys.exit(1)
-
     if "func" not in args:
         parser.print_help()
         sys.exit(1)
 
-    influx = InfluxDBClient(host=args.influx_host, port=args.influx_port)
-    influx.switch_database(args.influx_db)
-    influx.ping()
+    with open(args.config, "r") as f:
+        config = Config.parse_obj(json.load(f))
 
-    args.func(args, influx)
+    args.func(args, config)
 
 
 if __name__ == "__main__":
