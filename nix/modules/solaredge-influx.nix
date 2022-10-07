@@ -18,7 +18,7 @@ in
 
     package = mkOption {
       type = types.package;
-      default = (import ../pkgs { }).solaredge-influx;
+      default = (import ../pkgs { inherit pkgs; }).solaredge-influx;
     };
 
     settings = mkOption {
