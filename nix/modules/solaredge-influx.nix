@@ -90,6 +90,7 @@ in
 
       solaredge-import-power = {
         description = "Solaredge import power data to InfluxDB";
+        after = [ "influxdb2.service" ];
 
         serviceConfig = {
           Type = "oneshot";
@@ -99,6 +100,7 @@ in
 
       solaredge-import-inverter = {
         description = "Solaredge import inverter data to InfluxDB";
+        after = [ "influxdb2.service" ];
 
         serviceConfig = {
           Type = "oneshot";
@@ -108,6 +110,7 @@ in
 
       solaredge-import-energy = {
         description = "Solaredge import energy data to InfluxDB";
+        after = [ "influxdb2.service" ];
 
         serviceConfig = {
           Type = "oneshot";
