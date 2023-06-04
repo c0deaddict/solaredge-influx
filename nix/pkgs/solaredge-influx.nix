@@ -2,14 +2,9 @@
 
 buildPythonApplication rec {
   pname = "solaredge-influx";
-  version = "0.0.3";
+  version = "0.0.4";
 
-  src = fetchFromGitHub {
-    owner = "c0deaddict";
-    repo = "solaredge-influx";
-    rev = "v${version}";
-    sha256 = "sha256-IfPlE3qCvwSYQkJ0sE5z61ptj9jTZ1glkJAxbm0lFdY=";
-  };
+  src = lib.cleanSource ../..;
 
   propagatedBuildInputs = [ influxdb-client requests pydantic nats-py ];
 
