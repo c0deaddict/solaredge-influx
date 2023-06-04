@@ -6,6 +6,7 @@ mkShell {
       requests
       influxdb-client
       pydantic
+      nats-py
     ]))
   ];
 }

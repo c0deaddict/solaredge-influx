@@ -16,7 +16,7 @@ setuptools.setup(
     entry_points={
         "console_scripts": ["solaredge-influx = solaredge_influx.__main__:main"]
     },
-    install_requires=["requests", "influxdb-client", "pydantic"],
+    install_requires=["requests", "influxdb-client", "pydantic", "nats-py"],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

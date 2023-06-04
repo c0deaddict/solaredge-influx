@@ -1,4 +1,4 @@
-{ lib, buildPythonApplication, fetchFromGitHub, influxdb-client, pydantic, requests }:
+{ lib, buildPythonApplication, fetchFromGitHub, influxdb-client, pydantic, requests, nats-py }:
 
 buildPythonApplication rec {
   pname = "solaredge-influx";
@@ -11,7 +11,7 @@ buildPythonApplication rec {
     sha256 = "sha256-IfPlE3qCvwSYQkJ0sE5z61ptj9jTZ1glkJAxbm0lFdY=";
   };
 
-  propagatedBuildInputs = [ influxdb-client requests pydantic ];
+  propagatedBuildInputs = [ influxdb-client requests pydantic nats-py ];
 
   doCheck = false;
 

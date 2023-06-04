@@ -30,8 +30,22 @@ class InfluxDBConfig(BaseModel):
         return self._token
 
 
+class NatsConfig(BaseModel):
+    url: str
+    username: str
+    password_file: str
+    subject: str
+    _password: Optional[str] = PrivateAttr(default_factory=lambda: None)
+
+    @property
+    def password(self):
+        if self._password is None:
+            with open(self.password_file, "r") as f:
+                self._password = f.read().strip()
+        return self._password
+
+
 class Config(BaseModel):
     solaredge: SolaredgeConfig
     influxdb: InfluxDBConfig
-
-
+    nats: NatsConfig

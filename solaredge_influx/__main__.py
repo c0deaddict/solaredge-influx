@@ -1,10 +1,11 @@
 import argparse
 import requests
-from os import getenv
 import sys
+import asyncio
+from typing import Iterable
 
-from influxdb_client import InfluxDBClient, Point
-from influxdb_client.client.write_api import SYNCHRONOUS
+import nats
+from influxdb_client import InfluxDBClient
 from datetime import datetime, timedelta
 
 from .config import Config
@@ -32,6 +33,20 @@ def influx_write_points(config, points):
     with InfluxDBClient(**options) as client:
         with client.write_api() as write_api:
             write_api.write(config.influxdb.bucket, config.influxdb.org, points)
+
+
+async def async_nats_publish(config: Config, subject: str, msgs: Iterable[dict]):
+    nc = await nats.connect(
+        config.nats.url, user=config.nats.username, password=config.nats.password
+    )
+    js = nc.jetstream()
+    s = f"{config.nats.subject}.{subject}"
+    for m in msgs:
+        await js.publish(s, bytes(json.dumps(m), "utf-8"))
+
+
+def nats_publish(config: Config, subject: str, msgs: Iterable[dict]):
+    asyncio.run(async_nats_publish(config, subject, msgs))
 
 
 def version_check(args, config):
@@ -102,7 +117,7 @@ def time_period_params(args, max_period):
     )
 
 
-def convert_inverter_metric(metric, tags):
+def convert_inverter_metric_influx(metric, tags):
     time = datetime.strptime(metric["date"], "%Y-%m-%d %H:%M:%S")
 
     fields = dict(
@@ -133,21 +148,55 @@ def convert_inverter_metric(metric, tags):
     )
 
 
+def convert_inverter_metric_nats(metric, tags):
+    time = datetime.strptime(metric["date"], "%Y-%m-%d %H:%M:%S")
+
+    return dict(
+        **tags,
+        timestamp=time.astimezone().isoformat(),
+        total_active_power=metric["totalActivePower"],
+        dc_voltage=metric["dcVoltage"],
+        power_limit=metric["powerLimit"],
+        total_energy=metric["totalEnergy"],
+        temperature=metric["temperature"],
+        operation_mode=metric["operationMode"],
+        ac_current=metric["L1Data"]["acCurrent"],
+        ac_voltage=metric["L1Data"]["acVoltage"],
+        ac_frequency=metric["L1Data"]["acFrequency"],
+        apparent_power=metric["L1Data"]["apparentPower"],
+        active_power=metric["L1Data"]["activePower"],
+        reactive_power=metric["L1Data"]["reactivePower"],
+        cos_phi=metric["L1Data"]["cosPhi"],
+        # Not present when inverterMode="SLEEPING"
+        ground_fault_resistance=metric.get("groundFaultResistance"),
+    )
+
+
 def import_inverter_data(args, config):
     params = time_period_params(args, timedelta(days=7))
     url = f"/equipment/{config.solaredge.site_id}/{config.solaredge.serial}/data"
     response = api_request(config, url, params)
     tags = dict(site_id=config.solaredge.site_id, serial=config.solaredge.serial)
+
     influx_write_points(
         config,
         (
-            convert_inverter_metric(metric, tags)
+            convert_inverter_metric_influx(metric, tags)
+            for metric in response["data"]["telemetries"]
+        ),
+    )
+
+    nats_publish(
+        config,
+        "inverter",
+        (
+            convert_inverter_metric_nats(metric, tags)
             for metric in response["data"]["telemetries"]
         ),
     )
 
 
-def convert_power_metric(metric, tags):
+def convert_power_metric_influx(metric, tags):
     time = datetime.strptime(metric["date"], "%Y-%m-%d %H:%M:%S")
     power = metric.get("value")
     power = float(power if power is not None else 0)
@@ -159,17 +208,42 @@ def convert_power_metric(metric, tags):
     )
 
 
+def convert_power_metric_nats(metric, tags):
+    time = datetime.strptime(metric["date"], "%Y-%m-%d %H:%M:%S")
+    power = metric.get("value")
+    power = float(power if power is not None else 0)
+
+    return dict(
+        **tags,
+        timestamp=time.astimezone().isoformat(),
+        power=power,
+    )
+
+
 def import_power_data(args, config):
     params = time_period_params(args, timedelta(days=30))
     response = api_request(config, f"/site/{config.solaredge.site_id}/power", params)
     tags = dict(site_id=config.solaredge.site_id)
+
     influx_write_points(
         config,
-        (convert_power_metric(metric, tags) for metric in response["power"]["values"]),
+        (
+            convert_power_metric_influx(metric, tags)
+            for metric in response["power"]["values"]
+        ),
+    )
+
+    nats_publish(
+        config,
+        "power",
+        (
+            convert_power_metric_nats(metric, tags)
+            for metric in response["power"]["values"]
+        ),
     )
 
 
-def convert_energy_metric(metric, tags):
+def convert_energy_metric_influx(metric, tags):
     time = datetime.strptime(metric["date"], "%Y-%m-%d %H:%M:%S")
     energy = metric.get("value")
     energy = float(energy if energy is not None else 0)
@@ -181,6 +255,17 @@ def convert_energy_metric(metric, tags):
     )
 
 
+def convert_energy_metric_nats(metric, tags):
+    time = datetime.strptime(metric["date"], "%Y-%m-%d %H:%M:%S")
+    energy = metric.get("value")
+    energy = float(energy if energy is not None else 0)
+    return dict(
+        **tags,
+        timestamp=time.astimezone().isoformat(),
+        energy=energy,
+    )
+
+
 def import_energy_data(args, config):
     params = time_period_params(args, timedelta(days=30))
     params = dict(**params, meters="Production", timeUnit="QUARTER_OF_AN_HOUR")
@@ -189,8 +274,16 @@ def import_energy_data(args, config):
     )
     meter = response["energyDetails"]["meters"][0]
     tags = dict(site_id=config.solaredge.site_id)
+
     influx_write_points(
-        config, (convert_energy_metric(metric, tags) for metric in meter["values"])
+        config,
+        (convert_energy_metric_influx(metric, tags) for metric in meter["values"]),
+    )
+
+    nats_publish(
+        config,
+        "energy",
+        (convert_energy_metric_nats(metric, tags) for metric in meter["values"]),
     )
 
 
